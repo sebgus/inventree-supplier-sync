@@ -1,14 +1,14 @@
 # Plugin that syncronises parts with the Mouser database.
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
+from django.templatetags.static import static
 from django.urls import re_path
 
 import logging
 
 from plugin import InvenTreePlugin
-from plugin.mixins import ScheduleMixin, SettingsMixin, AppMixin, PanelMixin, UrlsMixin
+from plugin.mixins import ScheduleMixin, SettingsMixin, AppMixin, UrlsMixin, UserInterfaceMixin
 from part.models import Part
 from company.models import Company, SupplierPriceBreak, ManufacturerPart, SupplierPart
-from part.views import PartIndex
 
 from .version import PLUGIN_VERSION
 from .mouser import Mouser
@@ -25,7 +25,7 @@ logger.setLevel(logging.INFO)
 
 
 # ---------------------------- SupplierSyncPlugin -----------------------------
-class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, PanelMixin, InvenTreePlugin, UrlsMixin):
+class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, UserInterfaceMixin, InvenTreePlugin, UrlsMixin):
 
     NAME = "SupplierSyncPlugin"
     SLUG = "suppliersync"
@@ -34,7 +34,7 @@ class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, PanelMixin, Inv
     PUBLISH_DATE = "2023-02-16T20:55:08.914461+00:00"
     VERSION = PLUGIN_VERSION
     DESCRIPTION = 'Syncronize parts with Supplier SKU and price breaks'
-    MIN_VERSION = '0.11.0'
+    MIN_VERSION = '1.0.0'
 
     SCHEDULED_TASKS = {
         'member': {
@@ -85,35 +85,27 @@ class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, PanelMixin, Inv
         },
     }
 
-    # ------------------------- get_settings_content ---------------------------
-    # Some nice info for the user that will be shown in the plugin's settings
-    # page
-
-    def get_settings_content(self, request):
-        return """
-        <p>Setup:</p>
-        <ol>
-        <li>Create a key for the Mouser API</li>
-        <li>RTFM</li>
-        <li>Enable the plugin</li>
-        <li>Put key into settings</li>
-        <li>Put link to the API into settings</li>
-        <li>Enjoy</li>
-        </ol>
-        """
-
     # silence the requests messages
     logging.getLogger("requests").setLevel(logging.CRITICAL)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-    def get_custom_panels(self, view, request):
-        panels = []
-        self.sync_objects = SupplierPartChange.objects.order_by('pk')
-        if isinstance(view, PartIndex):
-            panels.append({'title': 'Sync results',
-                           'icon': 'fa-user',
-                           'content_template': 'supplier_sync/sync.html'})
-        return panels
+    def get_ui_panels(self, request, context=None, **kwargs):
+        """Return a panel on part detail pages showing sync results for that part."""
+        ctx = context or {}
+        target_model = str(ctx.get('target_model', '')).lower()
+        target_id = ctx.get('target_id')
+        if 'part' in target_model and target_id:
+            return [{
+                'key': 'supplier-sync-panel',
+                'title': 'Supplier Sync',
+                'feature_type': 'panel',
+                'source': static('inventree_supplier_sync/panel.js'),
+                'context': {
+                    'part_pk': target_id,
+                    'base_url': '/plugin/suppliersync/',
+                },
+            }]
+        return []
 
     def setup_urls(self):
         self.set_setting('FAILCOUNT', str(0))
@@ -121,6 +113,7 @@ class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, PanelMixin, Inv
             re_path(r'deleteentry/(?P<key>\d+)/', self.delete_entry, name='delete-entry'),
             re_path(r'addpart/(?P<key>\d+)/', self.add_supplierpart, name='add-part'),
             re_path(r'ignorepart/(?P<key>\d+)/', self.ignore_part, name='ignore-part'),
+            re_path(r'syncdata/(?P<part_pk>\d+)/', self.sync_data, name='sync-data'),
         ]
 
     # ---------------------------- update_part ------------------------------------
@@ -310,6 +303,25 @@ class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, PanelMixin, Inv
                                                       number_of_parts=number_of_results,
                                                       new_value=data['SKU'])
         return True
+
+# ------------------------------------- sync_data ----------------------------
+    def sync_data(self, request, part_pk):
+        """Return JSON list of SupplierPartChange records for the given part."""
+        items = SupplierPartChange.objects.filter(part__pk=part_pk).order_by('pk')
+        data = [
+            {
+                'pk': item.pk,
+                'change_type': item.change_type,
+                'old_value': item.old_value,
+                'new_value': item.new_value,
+                'comment': item.comment,
+                'link': item.link,
+                'number_of_parts': item.number_of_parts,
+                'updated_at': item.updated_at.strftime('%b %d, %Y'),
+            }
+            for item in items
+        ]
+        return JsonResponse(data, safe=False)
 
 # ------------------------------------- delete_entry -------------------------
     def delete_entry(self, request, key):
