@@ -89,13 +89,18 @@ class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, UserInterfaceMi
     logging.getLogger("requests").setLevel(logging.CRITICAL)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 
+    # Lifecycle statuses considered healthy — excluded from the overview panel
+    HEALTHY_LIFECYCLE_STATUSES = ['active', 'new product', '']
+
     def get_ui_panels(self, request, context=None, **kwargs):
-        """Return a panel on part detail pages showing sync results for that part."""
         ctx = context or {}
         target_model = str(ctx.get('target_model', '')).lower()
         target_id = ctx.get('target_id')
+        panels = []
+
+        # Sync results panel on part detail pages
         if 'part' in target_model and target_id:
-            return [{
+            panels.append({
                 'key': 'supplier-sync-panel',
                 'title': 'Supplier Sync',
                 'feature_type': 'panel',
@@ -104,8 +109,34 @@ class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, UserInterfaceMi
                     'part_pk': target_id,
                     'base_url': '/plugin/suppliersync/',
                 },
-            }]
-        return []
+            })
+
+        # Lifecycle overview panel on Mouser company detail page
+        if 'company' in target_model and target_id:
+            try:
+                mouser_pk = self.get_setting('MOUSER_PK')
+                if mouser_pk and str(target_id) == str(mouser_pk):
+                    panels.append({
+                        'key': 'supplier-lifecycle-panel',
+                        'title': 'Component Lifecycle',
+                        'feature_type': 'panel',
+                        'source': static('inventree_supplier_sync/lifecycle.js'),
+                        'context': {'base_url': '/plugin/suppliersync/'},
+                    })
+            except Exception:
+                pass
+
+        # Lifecycle overview panel on parts list page
+        if 'part' in target_model and not target_id:
+            panels.append({
+                'key': 'supplier-lifecycle-panel',
+                'title': 'Component Lifecycle',
+                'feature_type': 'panel',
+                'source': static('inventree_supplier_sync/lifecycle.js'),
+                'context': {'base_url': '/plugin/suppliersync/'},
+            })
+
+        return panels
 
     def setup_urls(self):
         self.set_setting('FAILCOUNT', str(0))
@@ -114,6 +145,7 @@ class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, UserInterfaceMi
             re_path(r'addpart/(?P<key>\d+)/', self.add_supplierpart, name='add-part'),
             re_path(r'ignorepart/(?P<key>\d+)/', self.ignore_part, name='ignore-part'),
             re_path(r'syncdata/(?P<part_pk>\d+)/', self.sync_data, name='sync-data'),
+            re_path(r'lifecycle/', self.lifecycle_data, name='lifecycle-data'),
         ]
 
     # ---------------------------- update_part ------------------------------------
@@ -303,6 +335,40 @@ class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, UserInterfaceMi
                                                       number_of_parts=number_of_results,
                                                       new_value=data['SKU'])
         return True
+
+# ---------------------------------- lifecycle_data ---------------------------
+    def lifecycle_data(self, request):
+        """Return JSON list of Mouser parts with non-active lifecycle status."""
+        try:
+            mouser_pk = int(self.get_setting('MOUSER_PK'))
+        except Exception:
+            return JsonResponse([], safe=False)
+
+        parts = SupplierPart.objects.filter(
+            supplier__pk=mouser_pk
+        ).exclude(
+            note__isnull=True
+        ).exclude(
+            note=''
+        ).select_related('part')
+
+        data = []
+        for sp in parts:
+            if (sp.note or '').lower() in self.HEALTHY_LIFECYCLE_STATUSES:
+                continue
+            if not sp.part:
+                continue
+            data.append({
+                'part_pk': sp.part.pk,
+                'ipn': sp.part.IPN or '',
+                'name': sp.part.name,
+                'sku': sp.SKU,
+                'lifecycle': sp.note,
+                'link': sp.link or '',
+            })
+
+        data.sort(key=lambda x: x['lifecycle'].lower())
+        return JsonResponse(data, safe=False)
 
 # ------------------------------------- sync_data ----------------------------
     def sync_data(self, request, part_pk):
