@@ -1,6 +1,5 @@
 # Plugin that syncronises parts with the Mouser database.
 from django.http import HttpResponse, JsonResponse
-from django.templatetags.static import static
 from django.urls import re_path
 
 import logging
@@ -99,12 +98,11 @@ class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, UserInterfaceMi
         panels = []
 
         # Sync results panel on part detail pages
-        if 'part' in target_model and target_id:
+        if target_model == 'part' and target_id:
             panels.append({
                 'key': 'supplier-sync-panel',
                 'title': 'Supplier Sync',
-                'feature_type': 'panel',
-                'source': static('inventree_supplier_sync/panel.js'),
+                'source': self.plugin_static_file('panel.js'),
                 'context': {
                     'part_pk': target_id,
                     'base_url': '/plugin/suppliersync/',
@@ -112,27 +110,25 @@ class SupplierSyncPlugin(AppMixin, ScheduleMixin, SettingsMixin, UserInterfaceMi
             })
 
         # Lifecycle overview panel on Mouser company detail page
-        if 'company' in target_model and target_id:
+        if target_model == 'company' and target_id:
             try:
                 mouser_pk = self.get_setting('MOUSER_PK')
                 if mouser_pk and str(target_id) == str(mouser_pk):
                     panels.append({
                         'key': 'supplier-lifecycle-panel',
                         'title': 'Component Lifecycle',
-                        'feature_type': 'panel',
-                        'source': static('inventree_supplier_sync/lifecycle.js'),
+                        'source': self.plugin_static_file('lifecycle.js'),
                         'context': {'base_url': '/plugin/suppliersync/'},
                     })
             except Exception:
                 pass
 
         # Lifecycle overview panel on parts list page
-        if 'part' in target_model and not target_id:
+        if target_model == 'part' and not target_id:
             panels.append({
                 'key': 'supplier-lifecycle-panel',
                 'title': 'Component Lifecycle',
-                'feature_type': 'panel',
-                'source': static('inventree_supplier_sync/lifecycle.js'),
+                'source': self.plugin_static_file('lifecycle.js'),
                 'context': {'base_url': '/plugin/suppliersync/'},
             })
 
